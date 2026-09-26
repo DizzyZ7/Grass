@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+frontend/node_modules/
+frontend/dist/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+*.db
