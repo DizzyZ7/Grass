@@ -85,3 +85,19 @@ export interface PublicProfile {
   best_streak: number; invite_count: number;
   achievement_catalog: Record<string, Achievement>;
 }
+
+/** Shared daily forecast and immutable personal field assignment, issued server-side. */
+export type WeatherEffect = 'sunny' | 'breezy' | 'rainy' | 'fireflies' | 'aurora';
+export interface Weather {
+  code: WeatherEffect; effect: WeatherEffect; name: string; icon: string;
+  description: string; date: string; location: string;
+}
+export interface FieldMission {
+  code: string; name: string; description: string; icon: string;
+  target: number; progress: number; xp: number; completed: boolean; claimed: boolean;
+  location_code: string | null; location_name: string | null;
+}
+export interface FieldReport {
+  date: string; resets_at: string; weather: Weather;
+  missions_completed: number; mission: FieldMission;
+}

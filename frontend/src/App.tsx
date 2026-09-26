@@ -4,9 +4,10 @@ import GrassCanvas from './components/GrassCanvas';
 import ShareCard from './components/ShareCard';
 import { api, configureAuth } from './lib/api';
 import { playTouch } from './lib/audio';
+import { isReportStale, progressPercent } from './lib/field';
 import { FLUSH_INTERVAL_MS, formatInt, makeBatch, SESSION_SECONDS, timeLeft, xpRatio } from './lib/game';
 import { impact, successHaptic, telegram } from './lib/telegram';
-import type { Achievement, Batch, BatchResult, DailyResponse, GameSession, GrassPhase, LeaderboardResponse, Player, PublicProfile, WeeklyResponse, WorldResponse } from './types';
+import type { Achievement, Batch, BatchResult, DailyResponse, FieldReport, GameSession, GrassPhase, LeaderboardResponse, Player, PublicProfile, WeeklyResponse, WorldResponse } from './types';
 
 const OUTBOX_KEY = 'touch-grass-outbox-v1';
 const SOUND_KEY = 'touch-grass-sound-v1';
@@ -46,9 +47,10 @@ export default function App() {
   const [world, setWorld] = useState<WorldResponse | null>(null);
   const [daily, setDaily] = useState<DailyResponse | null>(null);
   const [weekly, setWeekly] = useState<WeeklyResponse | null>(null);
+  const [field, setField] = useState<FieldReport | null>(null);
   const [leaders, setLeaders] = useState<LeaderboardResponse | null>(null);
   const [period, setPeriod] = useState<'day' | 'week'>('day');
-  const [panel, setPanel] = useState<'locations' | 'collection' | 'daily' | 'weekly' | 'leaderboard' | 'social' | null>(null);
+  const [panel, setPanel] = useState<'locations' | 'collection' | 'daily' | 'weekly' | 'leaderboard' | 'social' | 'field' | null>(null);
   const [discovery, setDiscovery] = useState<DiscoveredPlant | null>(null);
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [session, setSession] = useState<GameSession | null>(null);
@@ -98,14 +100,26 @@ export default function App() {
       api<WorldResponse>('/api/world'), api<DailyResponse>('/api/daily'),
       api<LeaderboardResponse>(`/api/leaderboard?period=${rankPeriod}`),
       api<WeeklyResponse>('/api/weekly'),
+      api<FieldReport>('/api/field-report'),
     ]);
     if (results[0].status === 'fulfilled') setWorld(results[0].value);
     if (results[1].status === 'fulfilled') setDaily(results[1].value);
     if (results[2].status === 'fulfilled') setLeaders(results[2].value);
     if (results[3].status === 'fulfilled') setWeekly(results[3].value);
+    if (results[4].status === 'fulfilled') setField(results[4].value);
   }, []);
 
-  const openPanel = useCallback((name: 'locations' | 'collection' | 'daily' | 'weekly' | 'leaderboard' | 'social') => {
+  useEffect(() => {
+    // Keep the forecast and daily mission current if Telegram stays open past UTC midnight.
+    if (!field) return;
+    const checkDay = () => {
+      if (isReportStale(field.date)) void refreshExtras(period);
+    };
+    const checkInterval = window.setInterval(checkDay, 60_000);
+    return () => window.clearInterval(checkInterval);
+  }, [field, period, refreshExtras]);
+
+  const openPanel = useCallback((name: 'locations' | 'collection' | 'daily' | 'weekly' | 'leaderboard' | 'social' | 'field') => {
     setPanel(previous => previous === name ? null : name);
     if (name === 'leaderboard') void api<LeaderboardResponse>(`/api/leaderboard?period=${period}`)
       .then(setLeaders).catch(showError);
@@ -150,6 +164,24 @@ export default function App() {
     } catch (err) { showError(err); }
     finally { setBusy(false); }
   }, [showError]);
+
+  const claimField = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await api<{player: Player; report: FieldReport; xp_granted: number;
+        new_achievements: string[]}>('/api/field-report/claim', {method: 'POST'});
+      setField(result.report); setPlayer(result.player);
+      setToast(result.xp_granted ? `+${result.xp_granted} XP. Экспедиция прошла без физического присутствия.` :
+        'Отчет уже подписан. Бюрократия отдыхает.');
+      if (result.new_achievements.length) {
+        setRecentlyUnlocked(result.new_achievements);
+        void api<MeResponse>('/api/me').then(data => setCatalog(data.achievement_catalog)).catch(() => {});
+      }
+      successHaptic(); setError('');
+    } catch (err) { showError(err); }
+    finally { setBusy(false); }
+  }, [busy, showError]);
 
   const togglePrivacy = useCallback(async () => {
     if (!player) return;
@@ -364,7 +396,7 @@ export default function App() {
           </div>
         </header>
         <section className="hero-text" aria-label="Название игры">
-          <div className="eyebrow"><span className="online-dot" /> ВЫСОКОТЕХНОЛОГИЧНАЯ ПРОГУЛКА v0.3</div>
+          <div className="eyebrow"><span className="online-dot" /> ВЫСОКОТЕХНОЛОГИЧНАЯ ПРОГУЛКА v0.4</div>
           <h1>Социализация?<br/><span>Нет, спасибо.</span></h1>
           <p>Мне сказали трогать траву. Я написал для этого бота.</p>
         </section>
@@ -381,9 +413,13 @@ export default function App() {
         <section className="game-card" aria-label="Игровая лужайка">
           <div className="game-topline"><button type="button" className="location-pill" disabled={phase === 'playing'} onClick={() => openPanel('locations')}>◉ {place?.name?.toUpperCase() || 'ПОДОКОННИК РАЗРАБОТЧИКА'} ▾</button>
             <span className="session-status"><span className="status-dot" />{phase === 'playing' ? 'LIVE' : 'ONLINE'}</span></div>
+          {field && <div className="weather-bar" role="status" aria-label={`Прогноз погоды: ${field.weather.name}`}>
+            <span>{field.weather.icon} {field.weather.name}</span>
+            <button type="button" onClick={() => openPanel('field')}>ПОЛЕВОЙ ЖУРНАЛ ↗</button>
+          </div>}
           <div className="grass-viewport">
             <GrassCanvas active={phase === 'playing'} light={light} onStroke={onStroke}
-              speciesColor={plant?.color} skyColor={place?.sky} groundColor={place?.ground} motion={plant?.motion} />
+              speciesColor={plant?.color} skyColor={place?.sky} groundColor={place?.ground} motion={plant?.motion} weather={field?.weather.effect} />
             {phase === 'playing' ? (
               <div className="canvas-upper"><div className="floating-count"><small>ПОГЛАЖЕНО ЗА СЕССИЮ</small>
                 <strong>{formatInt(shownTouches)}</strong><span>🌿 продолжай в том же духе</span></div>
@@ -432,6 +468,7 @@ export default function App() {
         <nav className="garden-nav" aria-label="Другие разделы">
           <button className={panel === 'locations' ? 'selected' : ''} onClick={() => openPanel('locations')}>🗺️ Локации</button>
           <button className={panel === 'collection' ? 'selected' : ''} onClick={() => openPanel('collection')}>🌿 Гербарий</button>
+          <button className={panel === 'field' ? 'selected' : ''} onClick={() => openPanel('field')}>🌦️ Экспедиция</button>
           <button className={panel === 'daily' ? 'selected' : ''} onClick={() => openPanel('daily')}>🎯 Задания</button>
           <button className={panel === 'weekly' ? 'selected' : ''} onClick={() => openPanel('weekly')}>📆 Неделя</button>
           <button className={panel === 'leaderboard' ? 'selected' : ''} onClick={() => openPanel('leaderboard')}>🏆 Топ</button>
@@ -440,7 +477,7 @@ export default function App() {
         {panel && <section className="garden-panel" aria-label="Игровые разделы">
           <div className="panel-heading"><div><small>GRASS.OS / {panel.toUpperCase()}</small><h2>{
             panel === 'locations' ? 'Куда сегодня не выходим?' : panel === 'collection' ? 'Музей травы' :
-            panel === 'daily' ? 'Планы на социализацию' :
+            panel === 'daily' ? 'Планы на социализацию' : panel === 'field' ? 'Полевой журнал 2.0' :
             panel === 'weekly' ? 'Заочная экспедиция' : panel === 'social' ? 'Люди из интернета' : 'Лига ботаников'}</h2></div>
             <button type="button" className="icon-button" onClick={() => setPanel(null)} aria-label="Закрыть">×</button></div>
           {panel === 'locations' && <div className="world-list">{world?.locations.map(location =>
@@ -459,6 +496,30 @@ export default function App() {
                 <i>{world.rarities[species.rarity]} {species.copies ? `· ×${species.copies}` : ''}</i></span>
                 <em>{world.selected_grass === species.code ? 'АКТИВНА' : species.unlocked ? 'ВЫБРАТЬ' : '🔒'}</em>
               </button>)}</div></>}
+          {panel === 'field' && <div className="field-report">
+            {field ? <>
+              <div className={`field-weather weather-${field.weather.code}`}>
+                <span className="weather-icon" aria-hidden="true">{field.weather.icon}</span>
+                <div><small>ПРОГНОЗ · {place?.name?.toUpperCase() || 'ТВОЙ ГАЗОН'}</small>
+                  <h3>{field.weather.name}</h3><p>{field.weather.description}</p></div>
+              </div>
+              <p className="panel-note">Каждый день своя погода и одна персональная экспедиция.
+                Задание фиксируется при первом открытии и не меняется при смене лужайки. Сброс в 00:00 UTC.</p>
+              <div className="field-mission">
+                <div className="field-mission-heading"><span aria-hidden="true">{field.mission.icon}</span>
+                  <div><small>ОПЕРАЦИЯ ДНЯ / {field.date}</small><h3>{field.mission.name}</h3></div></div>
+                <p>{field.mission.description}</p>
+                {field.mission.location_name && <div className="mission-location">📍 Цель: {field.mission.location_name}</div>}
+                <div className="quest-progress"><div style={{width: `${progressPercent(field.mission.progress, field.mission.target)}%`}} /></div>
+                <div className="field-mission-bottom"><span>{field.mission.progress} / {field.mission.target} · +{field.mission.xp} XP</span>
+                  <button type="button" disabled={busy || !field.mission.completed || field.mission.claimed}
+                    onClick={() => void claimField()}>{field.mission.claimed ? '✓ ВЫПОЛНЕНО' :
+                      field.mission.completed ? 'ЗАБРАТЬ НАГРАДУ' : 'В ПРОЦЕССЕ'}</button></div>
+              </div>
+              <div className="field-tracker">🔬 Экспедиций завершено: <b>{field.missions_completed}</b>
+                <span>· новые значки за 3 и 14 исследований</span></div>
+            </> : <p className="panel-note">Связь с природой устанавливается…</p>}
+          </div>}
           {panel === 'daily' && <><p className="panel-note">🔥 Серия: {daily?.streak || 0} дн. · рекорд: {daily?.best_streak || 0} дн. Один пропуск не сжигает серию. Сброс в 00:00 UTC.</p>
             <div className="quest-list">{daily?.quests.map(quest =>
               <div className="quest-tile" key={quest.code}><span className="quest-icon">{quest.icon}</span>

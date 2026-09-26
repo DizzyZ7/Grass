@@ -33,7 +33,8 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
       - run: alembic upgrade head
-      - run: python -c "from sqlalchemy import create_engine,inspect;import os; print('PostgreSQL tables:',inspect(create_engine(os.environ['DATABASE_URL'])).get_table_names())"
+      - run: alembic downgrade -1 && alembic upgrade head
+      - run: python -c "from sqlalchemy import create_engine,inspect;import os; tables=inspect(create_engine(os.environ['DATABASE_URL'])).get_table_names(); assert 'field_missions' in tables, tables; print('PostgreSQL tables:',tables)"
       - run: python -m compileall -q backend
   frontend:
     runs-on: ubuntu-latest

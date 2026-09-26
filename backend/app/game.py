@@ -28,6 +28,9 @@ ACHIEVEMENTS = {
     'ROOT_ACCESS': {'name': 'root@grass', 'description': '1024 принятых касания за одну сессию.', 'icon': '🪴', 'secret': True},
     'NIGHT_GARDENER': {'name': 'Полуночный ботаник', 'description': 'Заверши сессию между 00:00 и 04:00 UTC.', 'icon': '🌙', 'secret': True},
     'WEEKEND_NATURE': {'name': 'Трава вне расписания', 'description': 'Заверши выходную сессию с 100+ касаниями.', 'icon': '🗓️', 'secret': True},
+    'FIELD_SCOUT': {'name': 'Научный сотрудник газона', 'description': 'Заверши три персональные экспедиции.', 'icon': '🔬'},
+    'FIELD_VETERAN': {'name': 'Главный по фотосинтезу', 'description': 'Заверши 14 персональных экспедиций.', 'icon': '🎖️'},
+    'STORM_WALKER': {'name': 'Грозовой укротитель', 'description': 'Заверши дождливую сессию с 40+ касаниями.', 'icon': '⛈️', 'secret': True},
     'INVITE_FRIEND': {'name': 'Коллективный выход из дома', 'description': 'Друг присоединился по твоей ссылке.', 'icon': '🫂'},
 }
 
@@ -68,7 +71,7 @@ def session_view(session: GameSession | None) -> dict | None:
         return None
     return {'id': session.id, 'started_at': aware(session.started_at).isoformat(),
             'awarded': session.awarded, 'last_seq': session.last_seq,
-            'finished': session.finished_at is not None}
+            'finished': session.finished_at is not None, 'location_code': session.location_code}
 
 
 def active_session(db: Session, player_id: int, now: datetime | None = None) -> GameSession | None:
@@ -87,7 +90,8 @@ def start_session(db: Session, player: Player, now: datetime | None = None) -> t
     existing = active_session(db, player.id, now)
     if existing:
         return existing, ''
-    session = GameSession(player_id=player.id, started_at=now, last_award_at=now)
+    session = GameSession(player_id=player.id, started_at=now, last_award_at=now,
+                          location_code=player.selected_location)
     db.add(session)
     db.flush()  # SQLAlchemy assigns the default UUID on INSERT.
     _, joke, recent = pick_joke('start', player.recent_jokes or [], session.id)
@@ -198,6 +202,10 @@ def finish_session(db: Session, player_id: int, session_id: str,
                 get_achievement(db, player.id, 'NIGHT_GARDENER', new)
             if now.astimezone(timezone.utc).weekday() >= 5 and session.awarded >= 100:
                 get_achievement(db, player.id, 'WEEKEND_NATURE', new)
+            # Weather is decorative, but this secret is awarded from stored server session data.
+            from .weather import weather_for
+            if session.awarded >= 40 and weather_for(session.location_code, aware(session.started_at).astimezone(timezone.utc).date())['code'] == 'rainy':
+                get_achievement(db, player.id, 'STORM_WALKER', new)
             plant = find_grass(db, player, session, now)
             if plant and db.scalar(select(func.count()).select_from(GrassUnlock).where(GrassUnlock.player_id == player.id)) >= 5:
                 get_achievement(db, player.id, 'COLLECTOR_5', new)

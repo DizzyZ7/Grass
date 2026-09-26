@@ -7,6 +7,7 @@ interface Props {
   skyColor?: string;
   groundColor?: string;
   motion?: string;
+  weather?: 'sunny' | 'breezy' | 'rainy' | 'fireflies' | 'aurora';
   onStroke: (touches: number, combo: number) => void;
 }
 interface Blade {
@@ -30,17 +31,17 @@ function seeded(seed: number): () => number {
 }
 
 export default function GrassCanvas({ active, light, speciesColor = '#80e077', skyColor = '#1b4040',
-  groundColor = '#4f9361', motion = 'breeze', onStroke }: Props) {
+  groundColor = '#4f9361', motion = 'breeze', weather = 'sunny', onStroke }: Props) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const activeRef = useRef(active);
   const lightRef = useRef(light);
   const strokeRef = useRef(onStroke);
-  const appearance = useRef({ palette: makePalette(speciesColor), skyColor, groundColor, motion });
+  const appearance = useRef({ palette: makePalette(speciesColor), skyColor, groundColor, motion, weather });
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => { lightRef.current = light; }, [light]);
   useEffect(() => { strokeRef.current = onStroke; }, [onStroke]);
-  useEffect(() => { appearance.current = { palette: makePalette(speciesColor), skyColor, groundColor, motion }; },
-    [speciesColor, skyColor, groundColor, motion]);
+  useEffect(() => { appearance.current = { palette: makePalette(speciesColor), skyColor, groundColor, motion, weather }; },
+    [speciesColor, skyColor, groundColor, motion, weather]);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -48,7 +49,7 @@ export default function GrassCanvas({ active, light, speciesColor = '#80e077', s
     const g = canvas.getContext('2d', { alpha: false });
     if (!g) return;
     let w = 360; let h = 360; let raf = 0;
-    let last = 0; let lastStroke = 0; let pointer = false; let prevX = 0; let prevY = 0;
+    let last = 0; let lastStroke = 0; let activePointer: number | null = null; let prevX = 0; let prevY = 0;
     let combo = 0; let comboAt = 0;
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const slowDevice = (navigator.hardwareConcurrency || 6) <= 4;
@@ -74,7 +75,8 @@ export default function GrassCanvas({ active, light, speciesColor = '#80e077', s
     resize();
 
     const draw = (t: number) => {
-      const reduced = reducedMotion || document.hidden;
+      if (document.hidden) { raf = 0; return; }
+      const reduced = reducedMotion;
       const rate = reduced ? 18 : slowDevice ? 30 : 45;
       raf = requestAnimationFrame(draw);
       if (t - last < 1000 / rate) return;
@@ -101,6 +103,44 @@ export default function GrassCanvas({ active, light, speciesColor = '#80e077', s
         g.fillStyle = lightRef.current ? '#ffffff77' : '#caffb65a';
         g.beginPath(); g.arc(xx, yy + Math.sin(t / 1600 + i) * 3, i % 4 === 0 ? 2 : 1.1, 0, Math.PI * 2); g.fill();
       }
+      // Procedural micro-weather: the entire forecast lives in one deterministic
+      // server response. No location permissions, image assets, or weather APIs.
+      if (scene.weather === 'aurora') {
+        const ribbon = g.createLinearGradient(0, 0, w, h * .47);
+        ribbon.addColorStop(0, '#79f2d000');
+        ribbon.addColorStop(.45, '#98fccc33');
+        ribbon.addColorStop(.7, '#bb8bff4d');
+        ribbon.addColorStop(1, '#a5c0ff00');
+        g.fillStyle = ribbon;
+        g.beginPath(); g.moveTo(0, h * .26);
+        for (let i = 0; i <= 12; i++) {
+          const xx = w * i / 12;
+          g.lineTo(xx, h * (.20 + (reduced ? 0 : Math.sin(t * .00042 + i * .7) * .045)));
+        }
+        g.lineTo(w, h * .55); g.lineTo(0, h * .51); g.fill();
+      }
+      if (scene.weather === 'rainy') {
+        g.strokeStyle = lightRef.current ? '#e7fcff77' : '#b9e9ff66';
+        g.lineWidth = 1.15;
+        g.beginPath();
+        const drops = slowDevice ? 17 : 29;
+        for (let i = 0; i < drops; i++) {
+          const shift = reduced ? 0 : t * .21;
+          const xx = (i * 83 + 11 + shift * .26) % w;
+          const yy = (i * 127 + shift) % (h * .86);
+          g.moveTo(xx, yy); g.lineTo(xx - 4, yy + 12);
+        }
+        g.stroke();
+      }
+      if (scene.weather === 'fireflies') {
+        for (let i = 0; i < (slowDevice ? 7 : 13); i++) {
+          const fx = (i * 89 + 39 + (reduced ? 0 : Math.sin(t * .00036 + i) * 15)) % w;
+          const fy = h * (.14 + (i % 6) * .115) + (reduced ? 0 : Math.sin(t * .00091 + i * 2) * 11);
+          const glow = g.createRadialGradient(fx, fy, 0, fx, fy, 10);
+          glow.addColorStop(0, '#ecffbecc'); glow.addColorStop(1, '#b7ff8900');
+          g.fillStyle = glow; g.fillRect(fx - 10, fy - 10, 20, 20);
+        }
+      }
       g.fillStyle = scene.groundColor;
       g.beginPath(); g.moveTo(0, h * 0.76);
       g.bezierCurveTo(w * .25, h * .69, w * .38, h * .79, w * .63, h * .70);
@@ -116,7 +156,7 @@ export default function GrassCanvas({ active, light, speciesColor = '#80e077', s
         b.bend += b.velocity * step;
         b.bend = Math.max(-39, Math.min(39, b.bend));
         const pace = scene.motion === 'pulse' ? 2.1 : scene.motion === 'shy' ? .65 : 1.0;
-        const sway = reduced ? 0 : Math.sin(t * .0013 * pace + b.phase) * (scene.motion === 'pulse' ? 5 : 2);
+        const sway = reduced ? 0 : Math.sin(t * .0013 * pace + b.phase) * (scene.motion === 'pulse' ? 5 : scene.weather === 'breezy' ? 4 : 2);
         const tipX = b.x + b.bend + sway;
         const tipY = b.bottom - b.length;
         g.beginPath();
@@ -199,19 +239,20 @@ export default function GrassCanvas({ active, light, speciesColor = '#80e077', s
     };
     const down = (e: PointerEvent) => {
       if (!activeRef.current) return;
-      pointer = true;
+      if (activePointer !== null) return;
+      activePointer = e.pointerId;
       canvas.setPointerCapture(e.pointerId);
       brush(e, true);
     };
     const move = (e: PointerEvent) => {
-      if (pointer) brush(e, false);
+      if (activePointer === e.pointerId) brush(e, false);
     };
-    const up = () => { pointer = false; };
+    const up = (event: PointerEvent) => { if (activePointer === event.pointerId) activePointer = null; };
     canvas.addEventListener('pointerdown', down);
     canvas.addEventListener('pointermove', move);
     canvas.addEventListener('pointerup', up);
     canvas.addEventListener('pointercancel', up);
-    const wake = () => { if (!document.hidden) last = 0; };
+    const wake = () => { if (!document.hidden) { last = 0; if (!raf) raf = requestAnimationFrame(draw); } };
     document.addEventListener('visibilitychange', wake);
     return () => {
       cancelAnimationFrame(raf);

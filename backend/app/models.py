@@ -43,6 +43,7 @@ class GameSession(Base):
     last_seq: Mapped[int] = mapped_column(Integer, default=0)
     flags: Mapped[int] = mapped_column(Integer, default=0)
     species_awarded: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    location_code: Mapped[str] = mapped_column(String(40), default='windowsill', nullable=False)
     player: Mapped[Player] = relationship(back_populates='sessions')
 
 
@@ -103,3 +104,17 @@ class WeeklyClaim(Base):
     week_start: Mapped[date] = mapped_column(Date, nullable=False)
     quest_code: Mapped[str] = mapped_column(String(40), nullable=False)
     claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class FieldMission(Base):
+    __tablename__ = 'field_missions'
+    __table_args__ = (UniqueConstraint('player_id', 'day', name='uq_player_field_day'),
+                      Index('ix_field_missions_day', 'day'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey('players.id', ondelete='CASCADE'), index=True)
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    code: Mapped[str] = mapped_column(String(40), nullable=False)
+    location_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    xp: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

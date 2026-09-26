@@ -27,3 +27,40 @@
 .profile-facts span,.profile-badges span{background:var(--surface2);border:1px solid var(--line);border-radius:11px;padding:13px;font-size:12px;}
 .profile-badges{display:flex;flex-wrap:wrap;gap:8px;}.profile-badges span{font-size:10px;padding:9px;}
 @media(max-width:355px){.garden-nav button{font-size:10px;}.privacy-row{flex-direction:column;align-items:stretch;}}
+
+/* Stage 4 · daily dynamic micro-weather and player-specific field research. */
+.weather-bar{display:flex;align-items:center;justify-content:space-between;gap:9px;padding:9px 13px;
+  border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--surface) 68%,#69cb7480);font-size:11px;}
+.weather-bar span{font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.weather-bar button{font:9px 'DM Mono',monospace;border:1px solid var(--line);border-radius:9px;
+  padding:8px;background:var(--surface);color:var(--accent);white-space:nowrap;}
+.field-report{display:grid;gap:13px;}
+.field-weather{position:relative;display:flex;align-items:center;gap:15px;padding:19px;border:1px solid var(--line);
+  border-radius:16px;background:linear-gradient(112deg,#27553f,#193449);min-height:112px;color:#f5fff2;}
+.field-weather.weather-aurora{background:linear-gradient(125deg,#393261,#1d7766);}
+.field-weather.weather-rainy{background:linear-gradient(125deg,#2f5b79,#233d4a);}
+.field-weather.weather-fireflies{background:linear-gradient(125deg,#204a32,#25394d);}
+.field-weather.weather-sunny{background:linear-gradient(125deg,#54713a,#3e7c68);}
+.weather-icon{font-size:49px;flex-shrink:0;filter:drop-shadow(0 2px 12px #a2ffc755);}
+.field-weather small,.field-mission-heading small{font:9px 'DM Mono',monospace;letter-spacing:1px;color:#c2e8c9;}
+.field-weather h3,.field-mission h3{font-size:17px;margin:6px 0;line-height:1.3;}
+.field-weather p,.field-mission p{font-size:11px;line-height:1.5;margin:0;color:#d9eddf;}
+.field-mission{border:1px solid var(--line);border-radius:16px;padding:16px;background:var(--surface2);}
+.field-mission-heading{display:flex;gap:13px;align-items:center;margin-bottom:12px;}
+.field-mission-heading>span{font-size:31px;background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;width:48px;height:48px;display:grid;place-items:center;flex-shrink:0;}
+.field-mission-heading small{color:var(--accent);}
+.field-mission h3{color:var(--text);}
+.field-mission p{color:var(--muted);margin-bottom:12px;}
+.mission-location{display:inline-block;border:1px dashed var(--line);border-radius:8px;
+  padding:8px 10px;margin-bottom:13px;font-size:11px;color:var(--accent);}
+.field-mission .quest-progress{height:8px;margin:12px 0;}
+.field-mission-bottom{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;}
+.field-mission-bottom span{font:10px 'DM Mono',monospace;color:var(--muted);}
+.field-mission-bottom button{font-size:10px;white-space:nowrap;border:1px solid var(--accent);
+  background:var(--surface);color:var(--accent);border-radius:10px;padding:11px;}
+.field-mission-bottom button:not(:disabled){background:var(--accent);color:var(--accent-dark);font-weight:800;}
+.field-tracker{border:1px solid var(--line);border-radius:11px;padding:12px;font-size:11px;color:var(--muted);}
+.field-tracker b{color:var(--accent);}.field-tracker span{font-size:10px;}
+@media(max-width:355px){.weather-bar button{font-size:8px;padding:6px;}.weather-icon{font-size:37px;}
+  .field-weather{padding:13px;}.field-mission{padding:12px;}.garden-nav button{font-size:9px;}}

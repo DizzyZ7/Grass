@@ -20,6 +20,7 @@ from .game import ACHIEVEMENTS, active_session, apply_batch, finish_session, pub
 from .models import Player, AchievementUnlock
 from .schemas import BatchIn, PrivacyIn, SelectWorldIn
 from .progress import claim_daily, claim_weekly, daily_snapshot, leaderboard, select_grass, select_location, weekly_snapshot, world_snapshot
+from .field import claim_field_mission, field_report
 from .security import InvalidTelegramData, verify_init_data
 
 log = logging.getLogger('touch_grass')
@@ -85,7 +86,7 @@ async def lifespan(app: FastAPI):
         await app.state.bot.session.close()
 
 
-app = FastAPI(title='TOUCH GRASS.exe', version='0.3.0', lifespan=lifespan,
+app = FastAPI(title='TOUCH GRASS.exe', version='0.4.0', lifespan=lifespan,
               docs_url='/api/docs' if settings.dev_mode else None,
               redoc_url=None, openapi_url='/api/openapi.json' if settings.dev_mode else None)
 
@@ -245,6 +246,21 @@ def daily_claim(code: str, player: PlayerAuth, db: DB):
     try:
         reward = claim_daily(db, player, code)
         return {**reward, 'player': public_player(db, player)}
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get('/api/field-report')
+def get_field_report(player: PlayerAuth, db: DB):
+    return field_report(db, player)
+
+
+@app.post('/api/field-report/claim')
+def claim_field(player: PlayerAuth, db: DB):
+    try:
+        result = claim_field_mission(db, player)
+        return {**result, 'player': public_player(db, player)}
     except ValueError as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
