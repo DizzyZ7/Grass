@@ -11,14 +11,15 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .config import get_settings
 from .db import get_db
-from .game import ACHIEVEMENTS, active_session, apply_batch, finish_session, public_player, session_view, start_session
-from .models import Player
-from .schemas import BatchIn
+from .game import ACHIEVEMENTS, active_session, apply_batch, finish_session, public_player, session_view, start_session, unlocked, level_for_xp, get_achievement
+from .models import Player, AchievementUnlock
+from .schemas import BatchIn, PrivacyIn, SelectWorldIn
+from .progress import claim_daily, claim_weekly, daily_snapshot, leaderboard, select_grass, select_location, weekly_snapshot, world_snapshot
 from .security import InvalidTelegramData, verify_init_data
 
 log = logging.getLogger('touch_grass')
@@ -84,7 +85,7 @@ async def lifespan(app: FastAPI):
         await app.state.bot.session.close()
 
 
-app = FastAPI(title='TOUCH GRASS.exe', version='0.1.0', lifespan=lifespan,
+app = FastAPI(title='TOUCH GRASS.exe', version='0.3.0', lifespan=lifespan,
               docs_url='/api/docs' if settings.dev_mode else None,
               redoc_url=None, openapi_url='/api/openapi.json' if settings.dev_mode else None)
 
@@ -113,11 +114,11 @@ def player_auth(request: Request, db: Session = Depends(get_db)) -> Player:
     raw = request.headers.get('X-Telegram-Init-Data', '')
     if settings.dev_mode and not raw:
         # Intentionally insecure fake user, enabled EXCLUSIVELY by DEV_MODE.
-        # Production startup and Bothost .env must leave DEV_MODE=false.
+        # Production startup must leave DEV_MODE=false.
         demo_id = request.headers.get('X-Demo-User', '')
         if not demo_id.isdecimal() or not 0 < int(demo_id) < 10**10:
             raise HTTPException(401, 'Open through Telegram, or set X-Demo-User in local DEV_MODE')
-        identity = {'id': int(demo_id), 'first_name': 'DizZy [demo]', 'username': None}
+        identity = {'id': int(demo_id), 'first_name': 'DizZy [demo]', 'username': None, 'referrer_id': None}
     else:
         try:
             identity = verify_init_data(raw, settings.bot_token)
@@ -127,8 +128,14 @@ def player_auth(request: Request, db: Session = Depends(get_db)) -> Player:
         raise HTTPException(429, 'Слишком много запросов')
     player = db.get(Player, identity['id'])
     if player is None:
+        referrer_id = identity.get('referrer_id')
+        inviter = db.scalar(select(Player).where(Player.id == referrer_id).with_for_update()) if referrer_id else None
         player = Player(id=identity['id'], first_name=identity['first_name'],
-                        username=identity['username'], recent_jokes=[])
+                        username=identity['username'], recent_jokes=[],
+                        referrer_id=inviter.id if inviter else None)
+        if inviter and not db.scalar(select(AchievementUnlock).where(
+                AchievementUnlock.player_id == inviter.id, AchievementUnlock.code == 'INVITE_FRIEND')):
+            db.add(AchievementUnlock(player_id=inviter.id, code='INVITE_FRIEND'))
         db.add(player)
         try:
             db.commit()
@@ -157,15 +164,19 @@ def health(db: DB):
 @app.get('/api/config')
 def public_config(request: Request):
     return {'demo_mode': settings.dev_mode, 'bot_username': getattr(request.app.state, 'bot_username', ''),
-            'share_url': (f'https://t.me/{request.app.state.bot_username}?startapp' if
+            'share_url': (f'https://t.me/{request.app.state.bot_username}' if
                           getattr(request.app.state, 'bot_username', '') else settings.public_base_url)}
 
 
 @app.get('/api/me')
 def me(player: PlayerAuth, db: DB):
-    return {'player': public_player(db, player),
+    snapshot = public_player(db, player)
+    # Never ship undiscovered hidden achievement names in /api/me.
+    visible = {code: meta for code, meta in ACHIEVEMENTS.items()
+               if not meta.get('secret') or code in snapshot['achievements']}
+    return {'player': snapshot,
             'active_session': session_view(active_session(db, player.id)),
-            'achievement_catalog': ACHIEVEMENTS}
+            'achievement_catalog': visible}
 
 
 @app.post('/api/sessions', status_code=201)
@@ -193,6 +204,93 @@ def session_finish(session_id: str, player: PlayerAuth, db: DB):
     except LookupError as exc:
         db.rollback()
         raise HTTPException(404, str(exc)) from exc
+
+
+@app.get('/api/world')
+def world(player: PlayerAuth, db: DB):
+    return world_snapshot(db, player, level_for_xp(player.xp), set(unlocked(db, player.id)))
+
+
+@app.post('/api/world/location')
+def world_location(change: SelectWorldIn, player: PlayerAuth, db: DB):
+    try:
+        code = select_location(db, player, change.code, level_for_xp(player.xp),
+                               set(unlocked(db, player.id)))
+        if code != 'windowsill':
+            get_achievement(db, player.id, 'TRAVELER', [])
+            db.commit()
+        return {'selected_location': code, 'player': public_player(db, player)}
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(403, str(exc)) from exc
+
+
+@app.post('/api/world/grass')
+def world_grass(change: SelectWorldIn, player: PlayerAuth, db: DB):
+    try:
+        code = select_grass(db, player, change.code)
+        return {'selected_grass': code, 'player': public_player(db, player)}
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(403, str(exc)) from exc
+
+
+@app.get('/api/daily')
+def daily(player: PlayerAuth, db: DB):
+    return daily_snapshot(db, player)
+
+
+@app.post('/api/daily/claim/{code}')
+def daily_claim(code: str, player: PlayerAuth, db: DB):
+    try:
+        reward = claim_daily(db, player, code)
+        return {**reward, 'player': public_player(db, player)}
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get('/api/weekly')
+def weekly(player: PlayerAuth, db: DB):
+    return weekly_snapshot(db, player)
+
+
+@app.post('/api/weekly/claim/{code}')
+def weekly_claim(code: str, player: PlayerAuth, db: DB):
+    try:
+        reward = claim_weekly(db, player, code)
+        return {**reward, 'player': public_player(db, player)}
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post('/api/profile/privacy')
+def update_privacy(change: PrivacyIn, player: PlayerAuth, db: DB):
+    locked = db.get(Player, player.id, with_for_update=True)
+    locked.show_public_profile = change.show_public_profile
+    db.commit()
+    return {'player': public_player(db, locked)}
+
+
+@app.get('/api/leaderboard')
+def top_players(player: PlayerAuth, db: DB, period: str = 'day'):
+    if period not in ('day', 'week'):
+        raise HTTPException(422, 'Only day/week periods are supported')
+    return leaderboard(db, period)
+
+
+@app.get('/api/players/{player_id}')
+def public_profile(player_id: int, player: PlayerAuth, db: DB):
+    target = db.get(Player, player_id)
+    if not target or (not target.show_public_profile and target.id != player.id):
+        raise HTTPException(404, 'Player not found')
+    data = public_player(db, target)
+    public = {key: data[key] for key in ('id', 'first_name', 'username', 'total_touches',
+             'level', 'sessions_completed', 'achievements', 'best_streak', 'invite_count')}
+    public['achievement_catalog'] = {code: ACHIEVEMENTS[code] for code in data['achievements']
+                                     if code in ACHIEVEMENTS}
+    return public
 
 
 @app.post('/api/telegram/webhook', include_in_schema=False)

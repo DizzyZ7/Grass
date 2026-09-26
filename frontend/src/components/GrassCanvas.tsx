@@ -3,6 +3,10 @@ import { useEffect, useRef } from 'react';
 interface Props {
   active: boolean;
   light: boolean;
+  speciesColor?: string;
+  skyColor?: string;
+  groundColor?: string;
+  motion?: string;
   onStroke: (touches: number, combo: number) => void;
 }
 interface Blade {
@@ -10,7 +14,12 @@ interface Blade {
   bend: number; velocity: number; phase: number; shade: number; lastTouch: number;
 }
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; size: number; }
-const PALETTE = ['#266e49', '#39945a', '#4bbd67', '#6edc75', '#9ae883', '#d0fb9c'];
+function makePalette(hex: string): string[] {
+  const raw = hex.match(/^#[0-9a-fA-F]{6}$/) ? hex : '#80e077';
+  const rgb = [1, 3, 5].map(offset => parseInt(raw.slice(offset, offset + 2), 16));
+  return [.55, .7, .85, 1, 1.15, 1.3].map(factor => '#'+rgb.map(channel =>
+    Math.max(0, Math.min(255, Math.round(channel * factor))).toString(16).padStart(2, '0')).join(''));
+}
 
 function seeded(seed: number): () => number {
   let s = seed | 0;
@@ -20,14 +29,18 @@ function seeded(seed: number): () => number {
   };
 }
 
-export default function GrassCanvas({ active, light, onStroke }: Props) {
-  const ref = useRef<HTMLCanvasElement>(null);
+export default function GrassCanvas({ active, light, speciesColor = '#80e077', skyColor = '#1b4040',
+  groundColor = '#4f9361', motion = 'breeze', onStroke }: Props) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
   const activeRef = useRef(active);
   const lightRef = useRef(light);
   const strokeRef = useRef(onStroke);
+  const appearance = useRef({ palette: makePalette(speciesColor), skyColor, groundColor, motion });
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => { lightRef.current = light; }, [light]);
   useEffect(() => { strokeRef.current = onStroke; }, [onStroke]);
+  useEffect(() => { appearance.current = { palette: makePalette(speciesColor), skyColor, groundColor, motion }; },
+    [speciesColor, skyColor, groundColor, motion]);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -53,7 +66,7 @@ export default function GrassCanvas({ active, light, onStroke }: Props) {
         const near = r();
         return { x: (i + r() * 0.7) / number * w, bottom: h - 15 + r() * 24 - near * 30,
           length: 43 + r() * 95, width: 3 + r() * 5.5, bend: 0, velocity: 0,
-          phase: r() * 6.28, shade: Math.floor(r() * PALETTE.length), lastTouch: 0 };
+          phase: r() * 6.28, shade: Math.floor(r() * 6), lastTouch: 0 };
       }).sort((a, b) => a.length - b.length);
     };
     const onResize = new ResizeObserver(resize);
@@ -67,11 +80,12 @@ export default function GrassCanvas({ active, light, onStroke }: Props) {
       if (t - last < 1000 / rate) return;
       const step = Math.min(2, Math.max(0.5, (t - last) / 22));
       last = t;
+      const scene = appearance.current;
       const sky = g.createLinearGradient(0, 0, 0, h);
       if (lightRef.current) {
-        sky.addColorStop(0, '#a0d8cb'); sky.addColorStop(0.60, '#c8f3cc'); sky.addColorStop(1, '#d6f0a0');
+        sky.addColorStop(0, scene.skyColor); sky.addColorStop(0.60, '#c8f3cc'); sky.addColorStop(1, scene.groundColor);
       } else {
-        sky.addColorStop(0, '#152c2d'); sky.addColorStop(0.60, '#1e4937'); sky.addColorStop(1, '#345b32');
+        sky.addColorStop(0, '#101e27'); sky.addColorStop(0.60, scene.skyColor); sky.addColorStop(1, scene.groundColor);
       }
       g.fillStyle = sky; g.fillRect(0, 0, w, h);
       // Golden low sun and drifting dust, painted rather than loaded as licensed art.
@@ -87,12 +101,12 @@ export default function GrassCanvas({ active, light, onStroke }: Props) {
         g.fillStyle = lightRef.current ? '#ffffff77' : '#caffb65a';
         g.beginPath(); g.arc(xx, yy + Math.sin(t / 1600 + i) * 3, i % 4 === 0 ? 2 : 1.1, 0, Math.PI * 2); g.fill();
       }
-      g.fillStyle = lightRef.current ? '#77b56b' : '#244f3b';
+      g.fillStyle = scene.groundColor;
       g.beginPath(); g.moveTo(0, h * 0.76);
       g.bezierCurveTo(w * .25, h * .69, w * .38, h * .79, w * .63, h * .70);
       g.bezierCurveTo(w * .83, h * .64, w * .92, h * .71, w, h * .68);
       g.lineTo(w, h); g.lineTo(0, h); g.fill();
-      g.fillStyle = lightRef.current ? '#599c58' : '#275d39';
+      g.fillStyle = lightRef.current ? '#599c58' : scene.palette[0];
       g.beginPath(); g.moveTo(0, h * .90);
       g.quadraticCurveTo(w * .28, h * .79, w * .48, h * .88);
       g.quadraticCurveTo(w * .71, h * .78, w, h * .82); g.lineTo(w, h); g.lineTo(0, h); g.fill();
@@ -101,15 +115,20 @@ export default function GrassCanvas({ active, light, onStroke }: Props) {
         b.velocity += (-b.bend * .018 - b.velocity * .115) * step;
         b.bend += b.velocity * step;
         b.bend = Math.max(-39, Math.min(39, b.bend));
-        const sway = reduced ? 0 : Math.sin(t * .0013 + b.phase) * 2.0;
+        const pace = scene.motion === 'pulse' ? 2.1 : scene.motion === 'shy' ? .65 : 1.0;
+        const sway = reduced ? 0 : Math.sin(t * .0013 * pace + b.phase) * (scene.motion === 'pulse' ? 5 : 2);
         const tipX = b.x + b.bend + sway;
         const tipY = b.bottom - b.length;
         g.beginPath();
         g.moveTo(b.x - b.width * .55, b.bottom);
-        g.quadraticCurveTo(b.x + b.bend * .30 - b.width * .35, b.bottom - b.length * .61, tipX, tipY);
+        if (scene.motion === 'pixel') {
+          g.lineTo(b.x + b.bend * .35 - b.width, b.bottom - b.length * .52); g.lineTo(tipX, tipY);
+        } else {
+          g.quadraticCurveTo(b.x + b.bend * .30 - b.width * .35, b.bottom - b.length * .61, tipX, tipY);
+        }
         g.quadraticCurveTo(b.x + b.bend * .55 + b.width, b.bottom - b.length * .55, b.x + b.width * .48, b.bottom);
         g.closePath();
-        g.fillStyle = PALETTE[b.shade];
+        g.fillStyle = scene.palette[b.shade];
         g.fill();
         if (b.shade >= 3) {
           g.strokeStyle = '#eeffbd46'; g.lineWidth = .55; g.beginPath();
@@ -134,7 +153,7 @@ export default function GrassCanvas({ active, light, onStroke }: Props) {
         p.x += p.vx * step; p.y += p.vy * step; p.vy += .09 * step; p.life -= .027 * step;
         if (p.life <= 0) { particles.splice(i, 1); continue; }
         g.globalAlpha = Math.min(1, p.life);
-        g.fillStyle = '#e3ffa8'; g.beginPath(); g.ellipse(p.x, p.y, p.size, p.size / 2, p.vy, 0, 6.29); g.fill();
+        g.fillStyle = scene.palette[5]; g.beginPath(); g.ellipse(p.x, p.y, p.size, p.size / 2, p.vy, 0, 6.29); g.fill();
       }
       g.globalAlpha = 1;
       const shadow = g.createLinearGradient(0, h - 50, 0, h);

@@ -1,7 +1,7 @@
 """Minimal authoritative game data; no unverified client-supplied scores."""
 import uuid
-from datetime import datetime, timezone
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, Index
+from datetime import date, datetime, timezone
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
@@ -18,6 +18,14 @@ class Player(Base):
     total_touches: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     xp: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sessions_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    selected_location: Mapped[str] = mapped_column(String(40), default='windowsill', nullable=False)
+    selected_grass: Mapped[str] = mapped_column(String(40), default='meadow', nullable=False)
+    activity_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    best_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_active_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    show_public_profile: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    referrer_id: Mapped[int | None] = mapped_column(BigInteger().with_variant(Integer, 'sqlite'),
+        ForeignKey('players.id', ondelete='SET NULL'), index=True, nullable=True)
     recent_jokes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     sessions: Mapped[list['GameSession']] = relationship(back_populates='player')
@@ -25,6 +33,7 @@ class Player(Base):
 
 class GameSession(Base):
     __tablename__ = 'game_sessions'
+    __table_args__ = (Index('ix_session_player_finished', 'player_id', 'finished_at'),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     player_id: Mapped[int] = mapped_column(ForeignKey('players.id', ondelete='CASCADE'), index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -33,6 +42,7 @@ class GameSession(Base):
     awarded: Mapped[int] = mapped_column(Integer, default=0)
     last_seq: Mapped[int] = mapped_column(Integer, default=0)
     flags: Mapped[int] = mapped_column(Integer, default=0)
+    species_awarded: Mapped[str | None] = mapped_column(String(40), nullable=True)
     player: Mapped[Player] = relationship(back_populates='sessions')
 
 
@@ -41,6 +51,7 @@ class BatchReceipt(Base):
     __table_args__ = (
         UniqueConstraint('session_id', 'batch_id', name='uq_batch_session'),
         Index('ix_receipt_player_created', 'player_id', 'created_at'),
+        Index('ix_receipts_created_at', 'created_at'),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     player_id: Mapped[int] = mapped_column(ForeignKey('players.id', ondelete='CASCADE'))
@@ -61,3 +72,34 @@ class AchievementUnlock(Base):
     player_id: Mapped[int] = mapped_column(ForeignKey('players.id', ondelete='CASCADE'), index=True)
     code: Mapped[str] = mapped_column(String(50))
     unlocked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class GrassUnlock(Base):
+    __tablename__ = 'grass_unlocks'
+    __table_args__ = (UniqueConstraint('player_id', 'species_code', name='uq_player_grass'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey('players.id', ondelete='CASCADE'), index=True)
+    species_code: Mapped[str] = mapped_column(String(40), nullable=False)
+    copies: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    first_found_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DailyClaim(Base):
+    __tablename__ = 'daily_claims'
+    __table_args__ = (UniqueConstraint('player_id', 'day', 'quest_code', name='uq_player_day_quest'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey('players.id', ondelete='CASCADE'), index=True)
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    quest_code: Mapped[str] = mapped_column(String(40), nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class WeeklyClaim(Base):
+    __tablename__ = 'weekly_claims'
+    __table_args__ = (UniqueConstraint('player_id', 'week_start', 'quest_code',
+                                      name='uq_player_week_quest'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey('players.id', ondelete='CASCADE'), index=True)
+    week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    quest_code: Mapped[str] = mapped_column(String(40), nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

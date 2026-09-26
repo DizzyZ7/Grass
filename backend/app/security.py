@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import json
+import re
 import time
 from urllib.parse import parse_qsl
 
@@ -37,6 +38,9 @@ def verify_init_data(raw: str, token: str, *, now: int | None = None, ttl: int =
         if not isinstance(name, str):
             raise InvalidTelegramData('Invalid name')
         return {'id': user_id, 'first_name': name[:120] or 'Игрок',
+                'referrer_id': (int(match.group(1)) if (match := re.fullmatch(
+                    r'ref_([1-9][0-9]{0,14})', data.get('start_param', ''))) and
+                    int(match.group(1)) < 2**53 and int(match.group(1)) != user_id else None),
                 'username': (user.get('username') or '')[:64] if isinstance(user.get('username'), (str, type(None))) else None}
     except (TypeError, ValueError, KeyError, UnicodeError) as exc:
         raise InvalidTelegramData('Invalid or expired Telegram data') from exc

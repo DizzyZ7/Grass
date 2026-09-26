@@ -8,6 +8,22 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: grass
+          POSTGRES_PASSWORD: grass
+          POSTGRES_DB: grass
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U grass -d grass"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://grass:grass@localhost:5432/grass
+      DEV_MODE: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,6 +32,8 @@ jobs:
           cache: pip
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
+      - run: alembic upgrade head
+      - run: python -c "from sqlalchemy import create_engine,inspect;import os; print('PostgreSQL tables:',inspect(create_engine(os.environ['DATABASE_URL'])).get_table_names())"
       - run: python -m compileall -q backend
   frontend:
     runs-on: ubuntu-latest

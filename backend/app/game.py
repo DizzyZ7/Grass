@@ -2,10 +2,11 @@
 import logging
 import math
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from .jokes import JOKES, pick_joke
-from .models import AchievementUnlock, BatchReceipt, GameSession, Player, utc_now
+from .models import AchievementUnlock, BatchReceipt, GameSession, Player, GrassUnlock, utc_now
+from .progress import find_grass, record_activity
 from .schemas import BatchIn
 
 log = logging.getLogger(__name__)
@@ -20,6 +21,14 @@ ACHIEVEMENTS = {
     'GRASS_1000': {'name': 'Senior Grass Engineer', 'description': 'Тысяча поглаживаний. В резюме уже можно писать.', 'icon': '👑'},
     'FIRST_SESSION': {'name': 'Вышел из дома.exe', 'description': 'Успешно закрыл первую сессию.', 'icon': '🏡'},
     'COMBO_25': {'name': 'Травяное цунами', 'description': 'Комбо в 25 касаний за один заход.', 'icon': '🌊'},
+    'FRIDAY_DEPLOY': {'name': 'В пятницу на прод', 'description': 'Заверши сессию со 100 касаниями в пятницу по UTC.', 'icon': '🚀'},
+    'COLLECTOR_5': {'name': 'Гербарий.exe', 'description': 'Найди пять различных видов травы.', 'icon': '🌸'},
+    'TRAVELER': {'name': 'Вышел из подоконника', 'description': 'Посети вторую локацию.', 'icon': '🧭'},
+    'ERROR_404': {'name': 'Природа не найдена', 'description': '404 официально засчитанных касания.', 'icon': '📟', 'secret': True},
+    'ROOT_ACCESS': {'name': 'root@grass', 'description': '1024 принятых касания за одну сессию.', 'icon': '🪴', 'secret': True},
+    'NIGHT_GARDENER': {'name': 'Полуночный ботаник', 'description': 'Заверши сессию между 00:00 и 04:00 UTC.', 'icon': '🌙', 'secret': True},
+    'WEEKEND_NATURE': {'name': 'Трава вне расписания', 'description': 'Заверши выходную сессию с 100+ касаниями.', 'icon': '🗓️', 'secret': True},
+    'INVITE_FRIEND': {'name': 'Коллективный выход из дома', 'description': 'Друг присоединился по твоей ссылке.', 'icon': '🫂'},
 }
 
 
@@ -46,7 +55,12 @@ def public_player(db: Session, player: Player) -> dict:
     return {'id': str(player.id), 'first_name': player.first_name, 'username': player.username,
             'total_touches': player.total_touches, 'xp': player.xp, 'level': lvl,
             'current_level_xp': xp_for_level(lvl), 'next_level_xp': xp_for_level(lvl+1),
-            'sessions_completed': player.sessions_completed, 'achievements': codes}
+            'sessions_completed': player.sessions_completed, 'achievements': codes,
+            'selected_location': player.selected_location, 'selected_grass': player.selected_grass,
+            'streak': player.activity_streak, 'best_streak': player.best_streak,
+            'show_public_profile': player.show_public_profile,
+            'invite_count': db.scalar(select(func.count()).select_from(Player).where(
+                Player.referrer_id == player.id)) or 0}
 
 
 def session_view(session: GameSession | None) -> dict | None:
@@ -128,6 +142,10 @@ def apply_batch(db: Session, player_id: int, session_id: str, batch: BatchIn,
         get_achievement(db, player.id, 'GRASS_100', new)
     if player.total_touches >= 1000:
         get_achievement(db, player.id, 'GRASS_1000', new)
+    if player.total_touches >= 404:
+        get_achievement(db, player.id, 'ERROR_404', new)
+    if session.awarded >= 1024:
+        get_achievement(db, player.id, 'ROOT_ACCESS', new)
     # Combo is client-observed and not provable. Require 25 *server-accepted* touches
     # in the session before permitting this cosmetic achievement.
     if batch.peak_combo >= 25 and session.awarded >= 25:
@@ -138,7 +156,7 @@ def apply_batch(db: Session, player_id: int, session_id: str, batch: BatchIn,
     player.recent_jokes = recent
     receipt = BatchReceipt(player_id=player_id, session_id=session_id,
                            batch_id=str(batch.batch_id), seq=batch.seq, requested=batch.touches,
-                           awarded=granted, joke_id=joke_id, new_achievements=new)
+                           awarded=granted, joke_id=joke_id, new_achievements=new, created_at=now)
     db.add(receipt)
     if granted < batch.touches:
         session.flags += 1
@@ -167,15 +185,26 @@ def finish_session(db: Session, player_id: int, session_id: str,
     if not player or not session:
         raise LookupError('Session not found')
     new: list[str] = []
+    plant = None
     if session.finished_at is None:
         session.finished_at = now
         if session.awarded > 0:
             player.sessions_completed += 1
+            record_activity(player, now)
             get_achievement(db, player.id, 'FIRST_SESSION', new)
+            if now.astimezone(timezone.utc).weekday() == 4 and session.awarded >= 100:
+                get_achievement(db, player.id, 'FRIDAY_DEPLOY', new)
+            if 0 <= now.astimezone(timezone.utc).hour < 4:
+                get_achievement(db, player.id, 'NIGHT_GARDENER', new)
+            if now.astimezone(timezone.utc).weekday() >= 5 and session.awarded >= 100:
+                get_achievement(db, player.id, 'WEEKEND_NATURE', new)
+            plant = find_grass(db, player, session, now)
+            if plant and db.scalar(select(func.count()).select_from(GrassUnlock).where(GrassUnlock.player_id == player.id)) >= 5:
+                get_achievement(db, player.id, 'COLLECTOR_5', new)
         _, joke, recent = pick_joke('finish', player.recent_jokes or [], session.id)
         player.recent_jokes = recent
         db.commit()
     else:
         joke = 'Результат уже сохранен. Трава все помнит.'
     return {'session': session_view(session), 'player': public_player(db, player),
-            'new_achievements': new, 'joke': joke}
+            'new_achievements': new, 'joke': joke, 'new_plant': plant}
